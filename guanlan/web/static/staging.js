@@ -9,10 +9,79 @@
 
 $("#feed-btn").addEventListener("click", openFeed);
 
+// 解析作业完成后是否返回投喂浮层（从投喂入口触发解析时置 true，renderParseDone 据此切换返回目标）。
+let parseReturnToFeed = false;
+
 function openFeed() {
   showOverlay("overlay.feed", "");
   const box = $("#overlay-body");
   box.innerHTML = "";
+
+  // ── 上传文件区（P4.6 文件上传入口）：拖拽 / 选择 → POST /api/upload → workspace/uploads/ ──
+  const uploadHead = document.createElement("div");
+  uploadHead.className = "stage-head";
+  uploadHead.textContent = t("feed.uploadHead");
+  box.appendChild(uploadHead);
+
+  const drop = document.createElement("div");
+  drop.className = "feed-drop";
+  const dropHint = document.createElement("span");
+  dropHint.className = "feed-drop-hint";
+  dropHint.textContent = t("feed.dropHint");
+  const pickBtn = document.createElement("button");
+  pickBtn.type = "button";
+  pickBtn.className = "feed-pick";
+  pickBtn.textContent = t("feed.pickFiles");
+  const feedFileInput = document.createElement("input");
+  feedFileInput.type = "file";
+  feedFileInput.multiple = true;
+  feedFileInput.hidden = true;
+  feedFileInput.addEventListener("change", () => feedUploadFiles(feedFileInput.files));
+  pickBtn.addEventListener("click", () => { feedFileInput.value = ""; feedFileInput.click(); });
+  drop.append(dropHint, pickBtn, feedFileInput);
+  box.appendChild(drop);
+
+  // 已上传文件列表（上传后在此显示，带 解析 / 晋级 / 删除 操作）。
+  const fileList = document.createElement("div");
+  fileList.id = "feed-files";
+  box.appendChild(fileList);
+
+  // 拖拽上传到 drop 区（计数法消抖嵌套 drag 事件，只对文件拖拽响应）。
+  let feedDragDepth = 0;
+  drop.addEventListener("dragenter", (e) => {
+    if (!e.dataTransfer || !e.dataTransfer.types || !e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault(); feedDragDepth++; drop.classList.add("drag-active");
+  });
+  drop.addEventListener("dragover", (e) => {
+    if (!e.dataTransfer || !e.dataTransfer.types || !e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault(); e.dataTransfer.dropEffect = "copy";
+  });
+  drop.addEventListener("dragleave", (e) => {
+    if (!e.dataTransfer || !e.dataTransfer.types || !e.dataTransfer.types.includes("Files")) return;
+    feedDragDepth = Math.max(0, feedDragDepth - 1);
+    if (feedDragDepth === 0) drop.classList.remove("drag-active");
+  });
+  drop.addEventListener("drop", (e) => {
+    const f = e.dataTransfer && e.dataTransfer.files;
+    if (!f || !f.length) return;
+    e.preventDefault(); feedDragDepth = 0; drop.classList.remove("drag-active");
+    feedUploadFiles(f);
+  });
+
+  // ── 分隔线 ──
+  const divider = document.createElement("div");
+  divider.className = "feed-divider";
+  const divSpan = document.createElement("span");
+  divSpan.textContent = t("feed.orDivider");
+  divider.appendChild(divSpan);
+  box.appendChild(divider);
+
+  // ── 粘贴文本区（既有 P4.1 投喂：粘贴正文 + 命名 → POST /api/raw → raw/）──
+  const pasteHead = document.createElement("div");
+  pasteHead.className = "stage-head";
+  pasteHead.textContent = t("feed.pasteHead");
+  box.appendChild(pasteHead);
+
   const nameInput = document.createElement("input");
   nameInput.id = "feed-name";
   nameInput.className = "feed-name";
@@ -34,6 +103,118 @@ function openFeed() {
 
   saveBtn.addEventListener("click", () => submitFeed(false));
   nameInput.focus();
+}
+
+// 投喂浮层内上传：串行 POST /api/upload → workspace/uploads/，成功后渲染文件行（带 解析/晋级/删除）。
+// 刻意串行（镜像 attach.js uploadFiles）：避免并发持多份大文件 body 撑内存。
+async function feedUploadFiles(files) {
+  for (const file of Array.from(files || [])) await feedUploadOne(file);
+}
+
+async function feedUploadOne(file) {
+  const list = $("#feed-files");
+  if (!list) return;
+  // 占位行（上传中）。
+  const row = document.createElement("div");
+  row.className = "stage-row feed-uploading";
+  const ico = document.createElement("span");
+  ico.className = "stage-ico";
+  ico.textContent = "…";
+  const nm = document.createElement("span");
+  nm.className = "stage-name";
+  nm.textContent = file.name;
+  nm.title = file.name;
+  const meta = document.createElement("span");
+  meta.className = "stage-size muted";
+  meta.textContent = t("attach.uploading");
+  row.append(ico, nm, meta);
+  list.appendChild(row);
+  try {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    const res = await fetch("/api/upload", { method: "POST", body: fd });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 423) throw new Error(t("staging.writableRetry"));
+    if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+    row.remove();
+    feedRenderFileRow(data);
+  } catch (e) {
+    row.classList.add("feed-upload-error");
+    ico.textContent = "⚠";
+    meta.textContent = e.message;
+    const rm = document.createElement("button");
+    rm.type = "button";
+    rm.className = "stage-trash";
+    rm.textContent = "×";
+    rm.addEventListener("click", () => row.remove());
+    row.appendChild(rm);
+  }
+}
+
+// 渲染一枚已上传文件行：徽章 + 名 + 大小 + [解析](非 .md) / [晋级为源](.md) + 🗑。
+function feedRenderFileRow(data) {
+  const list = $("#feed-files");
+  if (!list) return;
+  const row = document.createElement("div");
+  row.className = "stage-row";
+  const ico = makeFileIcon(data.name, { isImage: data.kind === "image" });
+  ico.classList.add("stage-ico");
+  const nm = document.createElement("span");
+  nm.className = "stage-name";
+  nm.textContent = data.name;
+  nm.title = data.name;
+  const sz = document.createElement("span");
+  sz.className = "stage-size muted";
+  sz.textContent = fmtBytes(data.bytes);
+  row.append(ico, nm, sz);
+
+  const isMd = data.kind === "text" && /\.md$/i.test(data.name);
+  if (isMd) {
+    // .md 可直接晋级为源（退化路径，§6）。
+    row.appendChild(feedPromoteButton(data));
+  } else {
+    // 非 .md → 先解析成 Markdown（解析后回投喂浮层，parsed 文件在暂存区可见）。
+    const parse = document.createElement("button");
+    parse.className = "stage-act";
+    setStageIcon(parse, "i-play", t("staging.parse"), t("tip.parse"), false);
+    parse.addEventListener("click", () => {
+      parseReturnToFeed = true;
+      triggerParse(data.saved);
+    });
+    row.appendChild(parse);
+  }
+  row.appendChild(feedTrashButton(data.saved, row));
+  list.appendChild(row);
+}
+
+// 投喂浮层内的晋级按钮：点开行内晋级表单（复用 openPromoteForm 的 it 结构）。
+function feedPromoteButton(data) {
+  const btn = document.createElement("button");
+  btn.className = "stage-act stage-promote";
+  setStageIcon(btn, "i-arrow-right", t("staging.promote"), t("tip.promote"), false);
+  btn.addEventListener("click", () => openPromoteForm({ name: data.name, path: data.saved }, btn));
+  return btn;
+}
+
+// 投喂浮层内的删除按钮：DELETE /api/workspace/file（单写者 + 层③ 423）。
+function feedTrashButton(path, row) {
+  const btn = document.createElement("button");
+  btn.className = "stage-trash";
+  btn.textContent = "🗑";
+  btn.title = t("tip.delFile");
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    try {
+      const res = await fetch(`/api/workspace/file?path=${encodeURIComponent(path)}`, { method: "DELETE" });
+      if (res.status === 423) { btn.disabled = false; btn.title = t("staging.writableRetry"); return; }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      row.remove();
+    } catch (e) {
+      btn.disabled = false;
+      btn.title = t("staging.delFail", e.message);
+    }
+  });
+  return btn;
 }
 
 async function submitFeed(overwrite) {

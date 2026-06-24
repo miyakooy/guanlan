@@ -438,6 +438,18 @@ body.col-resizing { user-select: none; cursor: col-resize; }
 .feed-status button { background: var(--lan-ripple); color: #fff; border: 0; border-radius: 4px;
   padding: .2rem .7rem; cursor: pointer; }
 .feed-status button.feed-overwrite { background: transparent; color: #8a1f1f; border: 1px solid #f3c4c4; }
+/* 投喂浮层 · 上传区（P4.6 文件上传入口）：拖拽区 + 已上传文件行（复用 .stage-row）+ 分隔线。 */
+.feed-drop { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; padding: .8rem; margin-bottom: .4rem;
+  border: 2px dashed var(--lan-mist); border-radius: 6px; background: var(--lan-foam);
+  transition: border-color .16s, box-shadow .16s; }
+.feed-drop.drag-active { border-color: var(--lan-ripple); box-shadow: 0 0 0 3px rgba(63, 157, 179, .12); }
+.feed-drop-hint { color: var(--lan-ink-soft); font-size: .85rem; }
+.feed-pick { background: var(--lan-ripple); color: #fff; border: 0; border-radius: 4px; padding: .25rem .8rem;
+  cursor: pointer; font-size: .82rem; }
+.feed-pick:hover { background: var(--lan-deep); }
+.feed-divider { display: flex; align-items: center; gap: .6rem; margin: .8rem 0; color: var(--lan-ink-soft); font-size: .8rem; }
+.feed-divider::before, .feed-divider::after { content: ""; flex: 1; height: 1px; background: var(--lan-mist); }
+.feed-upload-error .stage-name { color: #8a1f1f; }
 
 /* heal 浮层（P4.3）：worklist 预览（控件 + 目标行 + 推迟）+ 物化回执（resolved/仍断/非预期写）。 */
 /* 顶部一行：左「物化 N 个目标」按钮，右 limit/min-refs/预览 微调控件。 */

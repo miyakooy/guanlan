@@ -169,8 +169,14 @@ function renderParseDone(job) {
   }
   const back = document.createElement("button");
   back.className = "stage-act";
-  back.textContent = t("staging.backToStaging");
-  back.addEventListener("click", () => { stagingPath = null; stagingOpen = true; loadStaging(); });
+  if (parseReturnToFeed) {
+    // 从投喂浮层触发解析：返回投喂浮层（parsed 文件在暂存区可见，可去暂存区晋级）。
+    back.textContent = t("feed.backToFeed");
+    back.addEventListener("click", () => { parseReturnToFeed = false; openFeed(); });
+  } else {
+    back.textContent = t("staging.backToStaging");
+    back.addEventListener("click", () => { stagingPath = null; stagingOpen = true; loadStaging(); });
+  }
   box.appendChild(back);
 }
 
