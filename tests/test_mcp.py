@@ -81,12 +81,18 @@ def _run(mcp, coro_fn):
 
 
 def test_tools_listed(kb_mcp):
-    """tools/list = 七个只读工具，且**无**任何写工具（决策P4.10-3/5/§7 写工具不存在）。"""
+    """tools/list = 七个只读工具 + 一个暂存区写入工具 deposit（写 workspace/staging/，非知识库本体）。
+
+    deposit 写的是暂存区（scratch），不是 `raw/` 或 `wiki/`——不违反 P4.10 的"对知识库只读"契约
+    （决策P4.10-3：只读指对知识库本体只读，暂存区是 agent 与人之间的缓冲地带）。
+    """
     mcp = build_mcp(kb_mcp, runner=_ok_runner)
     res = _run(mcp, lambda c: c.list_tools())
     names = {t.name for t in res.tools}
-    assert names == {"search", "read_page", "list_pages", "graph", "health", "lint", "ask"}
-    # 写工具不是「注册后拒绝」，是**根本不注册**。
+    assert names == {
+        "search", "read_page", "list_pages", "graph", "health", "lint", "ask", "deposit",
+    }
+    # 写知识库本体的工具不是「注册后拒绝」，是**根本不注册**。
     for forbidden in ("ingest", "heal", "backfill", "raw", "upload", "write_file"):
         assert forbidden not in names
 
@@ -422,6 +428,7 @@ def test_stdout_clean_during_full_suite(kb_mcp):
         await c.call_tool("lint", {})
         await c.call_tool("ask", {"question": "q"})
         await c.call_tool("read_page", {"path": "../bad.md"})  # 触发 in-band 错误路径
+        await c.call_tool("deposit", {"title": "stdout 测试", "content": "# 测试\n零字节到 stdout"})  # 写暂存区也不破 stdout
 
     with redirect_stdout(buf):
         _run(mcp, all_tools)
@@ -464,6 +471,108 @@ def test_full_suite_zero_kb_write(kb_mcp):
     assert not (kb_mcp / "agentao.log").exists()
     assert not (kb_mcp / ".agentao").exists()
     assert not (kb_mcp / "graph").exists()  # graph 工具不落派生物
+
+
+# ───────────────────────── deposit：暂存区写入工具（写 workspace/staging/，非知识库本体） ─────────────────────────
+
+
+def test_deposit_writes_to_staging_not_kb(kb_mcp):
+    """deposit 写 workspace/staging/<slug>.md，**不碰 raw/ 或 wiki/**（暂存区 ≠ 知识库本体）。"""
+    mcp = build_mcp(kb_mcp, runner=_ok_runner)
+    raw_before = _snapshot(kb_mcp / "raw") if (kb_mcp / "raw").is_dir() else {}
+    wiki_before = _snapshot(kb_mcp / "wiki")
+
+    async def call(c):
+        return await c.call_tool("deposit", {"title": "重构决策", "content": "# 重构决策\n解耦 Agentao"})
+
+    res = _run(mcp, call)
+    # 落点在 workspace/staging/
+    staging_file = kb_mcp / "workspace" / "staging" / "重构决策.md"
+    assert staging_file.is_file()
+    assert staging_file.read_text(encoding="utf-8") == "# 重构决策\n解耦 Agentao"
+    # raw/ 与 wiki/ 零变动
+    assert _snapshot(kb_mcp / "wiki") == wiki_before
+    if (kb_mcp / "raw").is_dir():
+        assert _snapshot(kb_mcp / "raw") == raw_before
+    # 信封字段
+    data = res.structuredContent if res.structuredContent is not None else json.loads(res.content[0].text)
+    assert data["saved"] == "workspace/staging/重构决策.md"
+    assert data["bytes"] == len("# 重构决策\n解耦 Agentao".encode("utf-8"))
+
+
+def test_deposit_rejects_empty_title_or_content(kb_mcp):
+    """空 title / 空 content → in-band tool error（不落盘）。"""
+    mcp = build_mcp(kb_mcp, runner=_ok_runner)
+
+    async def call_empty_title(c):
+        return await c.call_tool("deposit", {"title": "", "content": "内容"})
+
+    async def call_empty_content(c):
+        return await c.call_tool("deposit", {"title": "标题", "content": ""})
+
+    for call_fn in (call_empty_title, call_empty_content):
+        res = _run(mcp, call_fn)
+        assert res.isError, "空 title/content 应返回 in-band error"
+
+
+def test_deposit_same_name_rejected_without_overwrite(kb_mcp):
+    """同名默认拒绝（in-band error），不覆盖既有暂存文件。"""
+    mcp = build_mcp(kb_mcp, runner=_ok_runner)
+
+    async def deposit_once(c):
+        return await c.call_tool("deposit", {"title": "决策", "content": "v1"})
+
+    _run(mcp, deposit_once)  # 第一次成功
+    res = _run(mcp, deposit_once)  # 第二次同名 → error
+    assert res.isError
+    # 原文件未被覆盖
+    assert (kb_mcp / "workspace" / "staging" / "决策.md").read_text(encoding="utf-8") == "v1"
+
+
+def test_deposit_overwrite_replaces_content(kb_mcp):
+    """overwrite=true 覆盖既有暂存文件。"""
+    mcp = build_mcp(kb_mcp, runner=_ok_runner)
+
+    async def deposit_v1(c):
+        return await c.call_tool("deposit", {"title": "决策", "content": "v1"})
+
+    async def deposit_v2(c):
+        return await c.call_tool("deposit", {"title": "决策", "content": "v2 覆盖", "overwrite": True})
+
+    _run(mcp, deposit_v1)
+    _run(mcp, deposit_v2)
+    assert (kb_mcp / "workspace" / "staging" / "决策.md").read_text(encoding="utf-8") == "v2 覆盖"
+
+
+def test_deposit_slug_from_title(kb_mcp):
+    """title 经 slug 化成文件名（中文保留、空格转连字符、特殊字符剔除）。"""
+    mcp = build_mcp(kb_mcp, runner=_ok_runner)
+
+    async def call(c):
+        return await c.call_tool("deposit", {"title": "Agent 运行时 解耦！", "content": "x"})
+
+    res = _run(mcp, call)
+    data = res.structuredContent if res.structuredContent is not None else json.loads(res.content[0].text)
+    saved = data["saved"]
+    assert saved.startswith("workspace/staging/")
+    assert saved.endswith(".md")
+    # 文件确实存在
+    assert (kb_mcp / saved).is_file()
+
+
+def test_deposit_stdout_clean(kb_mcp):
+    """deposit 是确定性写、零 LLM——不向 stdout 写任何字节（不破 JSON-RPC 帧）。"""
+    mcp = build_mcp(kb_mcp, runner=_ok_runner)
+    buf = io.StringIO()
+
+    async def call(c):
+        await c.call_tool("deposit", {"title": "stdout 洁净", "content": "# 测试"})
+        await c.call_tool("deposit", {"title": "同名冲突", "content": "x"})  # 成功
+        await c.call_tool("deposit", {"title": "同名冲突", "content": "y"})  # in-band error
+
+    with redirect_stdout(buf):
+        _run(mcp, call)
+    assert buf.getvalue() == ""
 
 
 # ───────────────────────── serve_mcp 前置校验 / 方向不混 ─────────────────────────

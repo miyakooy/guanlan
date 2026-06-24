@@ -35,6 +35,11 @@ from ..health import run_health
 from ..lint import run_lint
 from ..pages import iter_pages, load_page, page_title, page_type, report_dict
 from ..query import QUERY_PROMPT
+from ..rawio import (
+    atomic_write_staging,
+    check_text_admission,
+    safe_staging_target,
+)
 from ..runtime import AgentRunner, run_agent_task
 from ..search import CorpusCache, search_result_dict
 
@@ -45,6 +50,7 @@ __all__ = [
     "GraphEnvelope",
     "ReportEnvelope",
     "AskEnvelope",
+    "DepositEnvelope",
     "tool_search",
     "tool_read_page",
     "tool_list_pages",
@@ -52,6 +58,7 @@ __all__ = [
     "tool_health",
     "tool_lint",
     "tool_ask",
+    "tool_deposit",
 ]
 
 _F = TypeVar("_F", bound=Callable[..., Any])
@@ -142,6 +149,13 @@ class AskEnvelope(TypedDict):
     """`ask` 信封：观澜只读 Agentao 综合出的带 `[[引用]]` 答案。"""
 
     answer: str
+
+
+class DepositEnvelope(TypedDict):
+    """`deposit` 信封：agent 上下文已沉淀到暂存区（非源、需人审核后晋级为 raw/ 源）。"""
+
+    saved: str
+    bytes: int
 
 
 # ───────────────────────── 零 LLM 检索工具（无模型、可离线） ─────────────────────────
@@ -301,3 +315,41 @@ def tool_ask(
     if not run_result.ok:
         raise ToolError(run_result.final_text or "Agentao 运行失败。")
     return {"answer": run_result.final_text}
+
+
+# ───────────────────────── 暂存区写入工具 deposit（零 LLM，写 workspace/staging/） ─────────────────────────
+
+
+@_guard("deposit")
+def tool_deposit(
+    title: object,
+    content: object,
+    *,
+    root: Path,
+    overwrite: bool = False,
+) -> DepositEnvelope:
+    """把一段 agent 上下文沉淀到暂存区 `workspace/staging/`（非源、需人审核后晋级为 `raw/` 源）。
+
+    **确定性、零 LLM**：复用 `rawio.safe_staging_target`（slug + 越界校验）+ `check_text_admission`
+    （空/超限/控制字符闸）+ `atomic_write_staging`（原子写、同名冲突 raise ValueError → in-band error）。
+
+    **不碰 `raw/` 或 `wiki/`**——写的是暂存区（scratch），不是知识库本体。故不违反 P4.10 的
+    "对知识库只读"契约：deposit 写暂存区 ≠ 写知识库。暂存区是 agent 与人之间的缓冲地带。
+
+    **不自动晋级、不自动 ingest**——存与消化分开（沿用 P4.1 决策）。agent 先 deposit，
+    人审核后在 Web UI / CLI 晋级为 `raw/` 源，再 ingest 入 `wiki/`。
+
+    `title` 经 slug 化成文件名；`content` 原样写入（UTF-8、不渲染、不重写 `[[wikilink]]`）。
+    `overwrite=True` 时同名覆盖（暂存区是 scratch、可覆盖）。
+    """
+    if not isinstance(title, str) or not title.strip():
+        raise ToolError("title 不能为空（含纯空白）。")
+    if not isinstance(content, str) or not content.strip():
+        raise ToolError("content 不能为空（含纯空白）。")
+    target = safe_staging_target(root, title)
+    check_text_admission(content)
+    atomic_write_staging(target, content, overwrite=overwrite)
+    return {
+        "saved": target.relative_to(root).as_posix(),
+        "bytes": len(content.encode("utf-8")),
+    }

@@ -33,16 +33,18 @@ from ..runtime import AgentRunner
 from ..search import CorpusCache
 from .tools import (
     AskEnvelope,
+    DepositEnvelope,
     GraphEnvelope,
     PageEnvelope,
     PagesEnvelope,
     ReportEnvelope,
     SearchEnvelope,
     tool_ask,
+    tool_deposit,
     tool_graph,
     tool_health,
-    tool_list_pages,
     tool_lint,
+    tool_list_pages,
     tool_read_page,
     tool_search,
 )
@@ -79,6 +81,13 @@ _LINT_DESC = "图感知结构 lint：孤儿 / 断链 / 缺失实体（零 LLM，
 _ASK_DESC = (
     "把问题交给观澜自己的只读 Agentao，综合出**带 `[[引用]]`** 的答案（重路径：慢 + 费 token）。"
     "**不是检索面的替代**——优先 `search`+`read_page` 自行综合，仅当需要观澜式带引用综合时才用它。"
+)
+_DEPOSIT_DESC = (
+    "把一段 agent 上下文（对话决策、分析结论、设计笔记等）沉淀到暂存区 `workspace/staging/`。"
+    "**确定性、零 LLM**：title 经 slug 化成文件名、content 原样写入。"
+    "**写的是暂存区（scratch），不是知识库本体**——不碰 `raw/` 或 `wiki/`，不自动晋级、不自动 ingest。"
+    "人审核后在 Web UI / CLI 晋级为 `raw/` 源，再 ingest 入 `wiki/`。"
+    "同名默认拒绝（in-band error），`overwrite=true` 覆盖。"
 )
 
 
@@ -144,6 +153,13 @@ def build_mcp(
             functools.partial(
                 tool_ask, question, model, root=root, startup_model=startup_model, runner=runner
             )
+        )
+
+    @mcp.tool(name="deposit", description=_DEPOSIT_DESC)
+    async def deposit(title: str, content: str, overwrite: bool = False) -> DepositEnvelope:
+        # 零 LLM、确定性写暂存区；仍卸 to_thread 避免磁盘 IO 阻塞事件循环。
+        return await anyio.to_thread.run_sync(
+            functools.partial(tool_deposit, title, content, root=root, overwrite=overwrite)
         )
 
     return mcp

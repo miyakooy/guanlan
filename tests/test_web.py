@@ -1499,8 +1499,8 @@ def test_workspace_delete_dir_423_during_writable_turn(kb) -> None:
 
 
 def test_workspace_empty_dirs_ok(client, kb) -> None:
-    """子目录不存在 → 根视图两段皆空（不报错）。"""
-    assert client.get("/api/workspace").json() == {"root": True, "uploads": [], "parsed": []}
+    """子目录不存在 → 根视图三段皆空（不报错）。staging 为 deposit 工具的暂存区。"""
+    assert client.get("/api/workspace").json() == {"root": True, "uploads": [], "parsed": [], "staging": []}
 
 
 def test_workspace_file_preview_renders_md(client, kb) -> None:

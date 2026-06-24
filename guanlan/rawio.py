@@ -206,3 +206,63 @@ def atomic_write_raw(target: Path, content: str, overwrite: bool) -> int:
             os.unlink(tmp)
         raise
     return EXIT_OK
+
+
+# ── 暂存区（staging）写入原语 ──────────────────────────────────────────────
+#
+# 暂存区 `workspace/staging/` 是 agent 与人之间的缓冲地带——agent 产生的上下文 md 先落此，
+# 人审核后才晋级为 `raw/` 源。**不是知识库本体**（非 `raw/`、非 `wiki/`），故不违反 P4.10
+# 的"对知识库只读"契约：deposit 写暂存区 ≠ 写知识库。
+#
+# 与 `safe_raw_target` / `atomic_write_raw` 的差异：
+# - `safe_staging_target`：落点 `workspace/staging/` 而非 `raw/`；其余安全规则（slug、越界校验）逐字复用。
+# - `atomic_write_staging`：同名冲突 **raise ValueError**（不 print、不返回退出码）——MCP stdout
+#   即 JSON-RPC 帧，**绝不向 stdout 写非协议字节**（决策P4.10-13）；`_guard` 总壳把 ValueError
+#   收为 in-band tool error。
+
+
+def safe_staging_target(root: Path, name: str) -> Path:
+    """把 title/name 解析为 `<kb>/workspace/staging/<安全名>.md`（暂存区，非源）。
+
+    安全规则与 `safe_raw_target` 逐字一致（剥目录 → NFKC + 映射 → slug → 强制 .md → 越界校验），
+    只是落点从 `raw/` 改为 `workspace/staging/`。校验失败 `raise ValueError`。
+    """
+    normalized = normalize_basename(name)
+    suffix = Path(normalized).suffix.lower()
+    if suffix in _RAW_REJECT_EXTENSIONS:
+        raise ValueError(f"暂存只收 .md 文本；拒绝扩展名 {suffix}。")
+    stem = normalized[: -len(suffix)] if suffix == ".md" else normalized
+    slug = raw_slug(stem)
+    if not slug:
+        raise ValueError("文件名经规范化后为空，请改名。")
+    safe = f"{slug}.md"
+    staging = (root / "workspace" / "staging").resolve()
+    target = (staging / safe).resolve()
+    try:
+        target.relative_to(staging)
+    except ValueError:
+        raise ValueError(f"路径越界（须在 workspace/staging/ 内）：{name}") from None
+    return target
+
+
+def atomic_write_staging(target: Path, content: str, overwrite: bool) -> int:
+    """原子写暂存区文件。同名且未 `overwrite` → **raise ValueError**（不 print，MCP stdout 须洁净）。
+
+    与 `atomic_write_raw` 的唯一差异：同名冲突 raise 而非 print+返回退出码——MCP 工具走 in-band
+    error（`_guard` → `ToolError`），不走退出码/stdout。落盘仍同目录临时文件 + `os.replace`（原子）。
+    `workspace/staging/` 可能尚不存在（首次 deposit），故先 `mkdir(parents=True, exist_ok=True)`——
+    `safe_staging_target` 已校验路径在 `workspace/staging/` 内，mkdir 只补建该目录、不越界。
+    """
+    if target.exists() and not overwrite:
+        raise ValueError(f"workspace/staging/{target.name} 已存在；改名或加 overwrite=true 覆盖。")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            f.write(content)
+        os.replace(tmp, target)
+    except OSError:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+    return EXIT_OK

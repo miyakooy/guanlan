@@ -15,9 +15,10 @@ from fastapi import HTTPException
 from ..errors import EXIT_OK
 from .uploads import _classify_by_ext
 
-# workspace scratch 两子目录（决策P4.6-5/11）：列举（_list_workspace）与删除白名单
+# workspace scratch 子目录（决策P4.6-5/11）：列举（_list_workspace）与删除白名单
 # （_safe_workspace_scratch）的单一来源——不删整树、不碰将来可能出现的状态/会话目录。
-_SCRATCH_SUBDIRS = ("uploads", "parsed")
+# `staging`：MCP `deposit` 工具的落点——agent 上下文 md 暂存区（非源、需人审核后晋级为 raw/）。
+_SCRATCH_SUBDIRS = ("uploads", "parsed", "staging")
 
 
 def _dir_items(root: Path, d: Path) -> list[dict]:
@@ -71,15 +72,15 @@ def _safe_workspace_dir(root: Path, rel: str, *, allow_base_root: bool) -> tuple
             raise HTTPException(status_code=404, detail=f"目录不存在：{rel}")
         return candidate, subdir
     raise HTTPException(
-        status_code=400, detail=f"只能浏览/删除 workspace/uploads/ 或 workspace/parsed/ 内目录：{rel}"
+        status_code=400, detail=f"只能浏览/删除 workspace/uploads/、workspace/parsed/ 或 workspace/staging/ 内目录：{rel}"
     )
 
 
 def _list_workspace(root: Path, path: str | None = None) -> dict:
     """浏览 workspace scratch（**一级一级**，不展平，决策P4.6-5/12）。
 
-    - `path` 省略/空 → **根视图**：`{root: True, uploads: [...], parsed: [...]}`，各为 uploads/ 与
-      parsed/ 的直接子项（子目录 + 文件）。
+    - `path` 省略/空 → **根视图**：`{root: True, uploads: [...], parsed: [...], staging: [...]}`，各为
+      uploads/、parsed/ 与 staging/ 的直接子项（子目录 + 文件）。
     - `path` 给定 → **目录视图**：`{root: False, path, base, items}`，为该目录直接子项；`path` 须落在
       uploads/ 或 parsed/ 内（含其后代目录），否则 400 / 404。
     """
@@ -123,7 +124,7 @@ def _safe_workspace_md(root: Path, rel: str) -> Path:
             raise HTTPException(status_code=404, detail=f"workspace 文件不存在或非 .md：{rel}")
         return candidate
     raise HTTPException(
-        status_code=409, detail=f"路径越界（须在 workspace/uploads|parsed 内）：{rel}"
+        status_code=409, detail=f"路径越界（须在 workspace/uploads|parsed|staging 内）：{rel}"
     )
 
 
@@ -146,7 +147,7 @@ def _safe_workspace_scratch(root: Path, rel: str) -> Path:
         return candidate
     raise HTTPException(
         status_code=400,
-        detail=f"只能删 workspace/uploads/ 或 workspace/parsed/ 内文件：{rel}",
+        detail=f"只能删 workspace/uploads/、workspace/parsed/ 或 workspace/staging/ 内文件：{rel}",
     )
 
 
