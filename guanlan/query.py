@@ -1,6 +1,7 @@
 """query 工作流（P2，见 docs/P2-最小闭环.md §8）。
 
-`guanlan query "…"`：默认只读问答（`read-only` 姿态双重兜底，不取快照、不跑 check）。
+`guanlan query "…"`：默认只读问答。`read-only` 姿态 + raw/ 前后快照双重兜底
+（快照补齐解耦后非 Agentao 运行时无 read-only 姿态的 raw 安全漏洞）。
 `--backfill`：`workspace-write` + 与 ingest 完全一致的门禁，允许回填 `wiki/syntheses/`。
 """
 
@@ -12,7 +13,7 @@ from pathlib import Path
 from .errors import EXIT_AGENT_ERROR, EXIT_OK, GuanlanError
 from .gate import report_agent_error, run_guarded_write
 from .paths import require_kb_root
-from .runtime import AgentRunner, run_agent_task
+from .runtime import AgentRunner, run_readonly_task
 
 # 召回措辞**传输中立**（P5.1 决策P5.1-6）：不硬编码「先用 `guanlan search` CLI」——只读 CLI query
 # 与只读 Web 会话都没 shell，那是死指令；改成「用可用的 search 入口」，宿主 `guanlan_search` 工具
@@ -58,11 +59,15 @@ def run_query(
 def _run_readonly(
     question: str, kb: Path, model: str | None, runner: AgentRunner | None
 ) -> int:
-    """默认只读路径：read-only 姿态拦写入，不取 raw 快照、不跑 check。"""
-    run_result = run_agent_task(
+    """默认只读路径：read-only 姿态 + raw/ 前后快照双重兜底。
+
+    快照保护补齐解耦问题1：Agentao 的 read-only 姿态在运行时层拦截写操作，
+    但解耦后非 Agentao 运行时无等价姿态。run_readonly_task 在调用前后取 raw
+    快照比对，任何 raw 改动都判失败，使只读路径的 raw 不可变靠机制而非姿态。
+    """
+    run_result = run_readonly_task(
         QUERY_PROMPT.format(question=question),
         working_directory=kb,
-        permission_mode="read-only",
         model=model,
         runner=runner,
     )
