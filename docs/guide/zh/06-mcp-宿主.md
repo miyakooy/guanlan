@@ -29,7 +29,7 @@ guanlan -C my-wiki mcp --model <id>    # 覆盖 ask 工具的模型(仅 ask 用)
 }
 ```
 
-## 七个只读工具
+## 八个工具
 
 | 工具 | LLM? | 说明 |
 |---|---|---|
@@ -40,8 +40,24 @@ guanlan -C my-wiki mcp --model <id>    # 覆盖 ask 工具的模型(仅 ask 用)
 | `health` | 否 | 体检报告 |
 | `lint` | 否 | lint 报告 |
 | `ask` | **是** | 对知识库提问(复用 CLI-query 只读子进程路径) |
+| `deposit` | 否 | 把 agent 上下文暂存到 `workspace/staging/`（不碰知识库本体） |
 
-六个零-LLM 工具复用与 Web 读端点相同的内核;`ask` 走只读子进程(故 P4-8 嵌入坑不适用)。
+七个零-LLM 工具复用与 Web 读端点相同的内核;`ask` 走只读子进程(故 P4-8 嵌入坑不适用)。
+`deposit` 是唯一写工具——但它写的是暂存区（scratch），不是知识库本体（`raw/`/`wiki/`），不违反 P4.10 的只读契约。
+
+### 运行时选择
+
+`ask` 工具需要 Agent 运行时。通过环境变量 `GUANLAN_RUNTIME` 选择（默认 `agentao`；设 `openai` 走 OpenAI SDK，不依赖 agentao）：
+
+```bash
+# Agentao（默认）
+guanlan -C my-wiki mcp --model <id>
+
+# OpenAI SDK（需 openai 包 + OPENAI_API_KEY）
+GUANLAN_RUNTIME=openai guanlan -C my-wiki mcp --model gpt-4o-mini
+```
+
+两种运行时共享同一套硬约束注入和 raw 快照保护。
 
 ## 设计要点
 

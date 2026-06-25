@@ -1,7 +1,10 @@
 """`guanlan` CLI —— 薄包装器。
 
-`init` 确定性、零 LLM；`ingest` / `query` 经 `guanlan-wiki` skill 驱动 Agentao 完成并强制
+`init` 确定性、零 LLM；`ingest` / `query` 经 `guanlan-wiki` skill 驱动 Agent 完成并强制
 确定性门禁；`check` 是独立的零 LLM 校验。业务智能在 skill 与门禁里，本文件只做 argparse 接线。
+
+Agent 运行时经 `GUANLAN_RUNTIME` 环境变量选择（默认 agentao；设 openai 走 OpenAI SDK
+agent loop，不依赖 agentao，需设 OPENAI_API_KEY + --model）。
 """
 
 from __future__ import annotations
@@ -203,7 +206,7 @@ def _add_init_parser(sub, dir_parent) -> None:
 def _add_ingest_parser(sub, dir_parent) -> None:
     p = sub.add_parser("ingest", parents=[dir_parent], help="摄入一篇 .md 资料")
     p.add_argument("target", help="raw/ 下的 .md 文件，如 raw/x.md")
-    p.add_argument("--model", default=None, help="覆盖 Agentao 模型")
+    p.add_argument("--model", default=None, help="覆盖 Agent 运行时模型（agentao / openai runtime 通用）")
     p.set_defaults(func=_cmd_ingest)
 
 
@@ -213,7 +216,7 @@ def _add_query_parser(sub, dir_parent) -> None:
     p.add_argument(
         "--backfill", action="store_true", help="把好答案回填 wiki/syntheses/（走完整门禁）"
     )
-    p.add_argument("--model", default=None, help="覆盖 Agentao 模型")
+    p.add_argument("--model", default=None, help="覆盖 Agent 运行时模型（agentao / openai runtime 通用）")
     p.set_defaults(func=_cmd_query)
 
 
@@ -393,7 +396,7 @@ def _add_web_parser(sub, dir_parent) -> None:
     )
     p.add_argument("--port", type=int, default=8765, help="监听端口（默认 8765，仅 127.0.0.1）")
     p.add_argument("--no-browser", action="store_true", help="起服后不自动打开浏览器")
-    p.add_argument("--model", default=None, help="覆盖 Agentao 模型（透传写作业与会话）")
+    p.add_argument("--model", default=None, help="覆盖 Agent 运行时模型（透传写作业与会话）")
     p.add_argument(
         "--reader",
         action="store_true",
@@ -450,7 +453,7 @@ def _add_mcp_parser(sub, dir_parent) -> None:
         help="起只读 MCP 服务端（stdio，可选叠加层，需 `pip install 'guanlan-wiki[mcp]'`）：把 wiki "
         "检索/读页/图谱/体检暴露给任意 MCP 客户端（与『Agentao 作客户端的 Tool 注入』方向相反）",
     )
-    p.add_argument("--model", default=None, help="覆盖 ask 工具的 Agentao 模型（仅 ask 用）")
+    p.add_argument("--model", default=None, help="覆盖 ask 工具的 Agent 运行时模型（agentao / openai 通用，仅 ask 用）")
     p.set_defaults(func=_cmd_mcp)
 
 
